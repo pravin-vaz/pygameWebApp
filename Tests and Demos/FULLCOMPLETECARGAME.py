@@ -1,0 +1,344 @@
+import asyncio
+import pygame
+import sys, platform, math, random
+import time
+async def main():
+    screen_size=[320, 180]
+    #screen_size = [1920,1080]
+    screen = pygame.display.set_mode(screen_size, pygame.SCALED)
+    clock = pygame.time.Clock()
+    clock.tick(); pygame.time.wait(16)
+    road_texture = pygame.image.load("assets/road.png").convert()
+    mountains_texture = pygame.image.load("assets/mountains.png").convert()
+    car_sprite = pygame.image.load("assets/car_sprite1.png").convert_alpha()
+    tree_sprite = pygame.image.load("assets/tree.png").convert()
+    dial_sprite = pygame.image.load("assets/dial.png").convert()
+    needle_sprite = pygame.image.load("assets/needle.png")
+    tree_sprite.set_colorkey((255, 0, 255))
+    game_state = "menu"
+    while game_state == "menu":
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_RETURN:
+                game_state = "playing"
+
+        screen.fill((0, 0, 0))  # Clear screen each frame
+        draw_menu(screen)  # Draw text
+        pygame.display.flip()  # Update the display
+        clock.tick(60)  # Limit FPS
+        await asyncio.sleep(0)  # Keep async event loop alive
+    pygame.mixer.init()
+
+    gear_sounds = [
+        pygame.mixer.Sound("assets/Gear1.wav"),
+        pygame.mixer.Sound("assets/Gear2.wav"),
+        pygame.mixer.Sound("assets/Gear3.wav"),
+        pygame.mixer.Sound("assets/Gear4.wav"),
+        pygame.mixer.Sound("assets/Gear5.wav"),
+    ]
+
+    redline_sound = pygame.mixer.Sound("assets/Redline.wav")
+    redline_sound.set_volume(0.6)
+    car = Player(gear_sounds, redline_sound)
+    cars = [Car(-10), Car(-1), Car(7)]
+    trees = [Tree(-67), Tree(-55), Tree(-43), Tree(-33), Tree(-25), Tree(-13), Tree(-3)]
+    running = 1
+    lap_time = 0
+    score = 0
+    save = 'save_file.txt'
+    try:
+        with open(save, 'r') as file:
+            high_score = int(file.read())
+    except (FileNotFoundError, ValueError):
+        high_score = 0
+    if game_state == 'playing':
+
+        while running:
+            delta = clock.tick() / 1000 + 0.00001
+
+            score += 1 * delta * car.velocity
+            if score > high_score:
+                high_score = score
+                with open(save, 'w') as file:
+                    file.write(str(int(high_score)))
+
+            car.controls(delta)
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    running = 0
+                elif event.type == pygame.KEYUP:
+                    if event.key == pygame.K_q:
+                        car.gearshift_down()
+                    elif event.key == pygame.K_e:
+                        car.gearshift_up()
+                elif event.type == pygame.USEREVENT + 1:
+                    car.engine_channel.play(car.redline_sound, loops=-1)
+                    car.redline_playing = True
+                    car.rev_playing = False
+
+            screen.blit(mountains_texture, (-65-car.angle*82,0))
+            #screen.fill((100, 150, 250))
+            #vertical, draw_distance = 180, 1
+            vertical, draw_distance = screen_size[1],1
+            car.z = calc_z(car.x)
+           # z_buffer = [999 for element in range(180)]
+            z_buffer = [999 for element in range(screen_size[1])]
+
+            while draw_distance < 80:
+                last_vertical = vertical
+
+                while vertical >= last_vertical and draw_distance < 120:
+                    draw_distance += draw_distance/150
+                    x = car.x + draw_distance
+                    scale = 1/draw_distance
+                    z = calc_z(x) - car.z
+                    vertical = int(60+160*scale + z*scale)
+
+                if draw_distance < 120:
+                    z_buffer[int(vertical)] = draw_distance
+                    road_slice = road_texture.subsurface((0, 10*x%360,320, 1))
+                    colour = (int(50-draw_distance/3),int(130-draw_distance), int(50-z/20+30*math.sin(x)))
+                    pygame.draw.rect(screen, colour, (0, vertical, 320, 1))
+                    render_element(screen, road_slice, 500*scale, 1, scale, x, car, car.y, z_buffer)
+
+            for index in reversed(range(len(trees))):
+                scale = max(0.0001, 1/(trees[index].x - car.x))
+                render_element(screen, tree_sprite, 200 * scale, 300 * scale, scale, trees[index].x, car,trees[index].y + car.y, z_buffer)
+
+            if trees[0].x < car.x+1:
+                trees.pop(0)
+                trees.append(Tree(trees[-1].x))
+
+            for index in reversed(range(len(cars))):
+                scale = max(0.0001, 1 / (cars[index].x - car.x))
+                render_element(screen, car_sprite, 100 * scale, 80 * scale, scale,
+                               cars[index].x, car, -70 + car.y, z_buffer)
+                cars[index].x += cars[index].velocity * delta
+
+            if cars[0].x < car.x + 1:
+                cars.pop(0)
+                cars.append(Car(car.x, velocity=random.choice([40, 60, 80])))
+
+            lap_time += delta
+            render_hud(screen, car, lap_time, score, high_score, needle_sprite, dial_sprite)
+            player_rect = car_sprite.get_rect(topleft=(100, 120))
+            screen.blit(car_sprite, player_rect.topleft)
+            for index in reversed(range(len(cars))):
+                scale = max(0.0001, 1 / (cars[index].x - car.x))
+                rect = render_element(screen, car_sprite, 100 * scale, 80 * scale, scale,
+                                      cars[index].x, car, -70 + car.y, z_buffer)
+                if rect:
+                    hitbox = rect.inflate(-rect.width * 0.3, -rect.height * 0.3)
+                    if player_rect.colliderect(hitbox):
+                        print("CRASH with another car!")
+                        car.velocity = -10
+
+                        car.acceleration = 0
+                        cars[index].velocity = 0  # stop the AI car involved
+                        score = score / 2
+                        if player_rect.centerx < hitbox.centerx:
+                            player_rect.right = hitbox.left
+                        else:
+                            player_rect.left = hitbox.right
+
+            for index in reversed(range(len(trees))):
+                scale = max(0.0001, 1 / (trees[index].x - car.x))
+                rect = render_element(screen, tree_sprite, 200 * scale, 300 * scale, scale, trees[index].x, car,
+                                      trees[index].y + car.y, z_buffer)
+                if rect and player_rect.colliderect(rect):
+                    print("CRASH into a tree!")
+                    car.velocity = 0
+                    car.acceleration = 0
+            if abs(car.y - calc_y(car.x + 2) - 100) > 280 and car.velocity > 5:
+                score -= 1 * delta
+                car.velocity += -car.velocity * delta
+                car.acceleration += -car.acceleration * delta
+                pygame.draw.circle(screen, (255, 0, 0), (300, 170), 3)
+            pygame.display.update()
+            await asyncio.sleep(0)
+
+class Tree():
+    def __init__(self, distance):
+        self.x = distance + random.randint(10, 20) +0.5
+        self.y = random.randint(500, 1500)*random.choice([-1,1])
+def draw_menu(screen):
+    font = pygame.font.SysFont("Arial", 24, bold=True)
+    text = font.render("Press ENTER to Begin!", True, (255, 0, 0))
+    rect = text.get_rect(center=(screen.get_width()//2, screen.get_height()//2))
+    screen.blit(text, rect)
+
+
+def calc_y(x):
+    #return 200*math.sin(x/113) +170*math.sin(x/117)
+    #return 200*math.sin(x/1117) +170*math.sin(x/1113)
+    return 200*math.sin(x/13) +170*math.sin(x/17)
+
+def calc_z(x):
+    #return 200+80*math.sin(x/300)-120*math.sin(x/200)
+    return 200+80*math.sin(x/13)-120*math.sin(x/17)
+#def collision_detection():hhhhhhhhb
+
+
+def render_hud(screen, player, lap_time, score, high_score, dial_sprite, needle_sprite):
+    font = pygame.font.SysFont("Arial", 16)
+    screen.blit(dial_sprite, (65,65))
+    screen.blit(needle_sprite, (65,65))
+
+    speed_kmh = abs(player.velocity * 3.6)
+    speed_text = font.render(f"speed: {int(speed_kmh)} kmh", True, (255, 255, 255))
+    gear_text = font.render(f"Gear: {player.gear} ", True, (255, 255, 255))
+    screen.blit(speed_text, (5, 15))
+    screen.blit(gear_text, (5, 25))
+    score_text = font.render(f"score: {int(score)}", True, (255, 255, 255))
+    screen.blit(score_text, (5, 35))
+    high_score_text = font.render(f"High Score: {int(high_score)} ", True, (255, 255, 255))
+    screen.blit(high_score_text, (5, 45))
+def render_element(screen, sprite, width, height, scale, x, car, y, z_buffer):
+    y = calc_y(x) - y
+    z = calc_z(x) - car.z
+
+    vertical = int(60+160*scale + z*scale)
+    if vertical >= 1 and vertical < 180 and z_buffer[vertical-1] > 1/scale -10:
+        horizontal = 160-(160-y)*scale + car.angle*(vertical-150)
+
+        scaled_sprite = pygame.transform.scale(sprite, (int(width), int(height)))
+        rect = scaled_sprite.get_rect()
+        rect.topleft = (horizontal, vertical - height + 1)
+
+        screen.blit(scaled_sprite, rect.topleft)
+        return rect
+    return None
+
+class Car():
+    def __init__(self, distance, velocity=50):
+        self.x = distance + random.randint(10, 50)
+        self.velocity = velocity
+        print(f"[SPAWN] New AI car at x={self.x}")
+
+class Player():
+    def __init__(self, gear_sounds, redline_sound):
+        self.x = 0
+        self.y = 300
+        self.z = 0
+        self.angle = 0
+        self.velocity = 0
+        self.acceleration = 0
+        self.steer_base = 0.5
+        self.steer_speed_factor = self.velocity / 50
+        self.steer_factor = self.steer_base / (1 + self.velocity * 0.2)
+        self.gear = 1
+        self.gear_max = 8
+        self.gear_ratios = [0, 2.2, 1.8, 1.5, 1.35, 1.2, 1.05, 0.75, 0.45]
+        #self.gear_ratios = [0, 4, 3.5, 3, 2.5, 2, 1.5, 1.0, 0.55]
+
+        #self.acceleration_multiplier = 0.025  # slows down overall acceleration to ~34 sec to top speed
+        self.reversed_list = list(reversed(self.gear_ratios))
+        self.max_speed = 0
+        self.gear_sounds = gear_sounds
+        self.redline_sound = redline_sound
+        self.engine_channel = pygame.mixer.Channel(0)  # use one channel for looping redline
+        self.rev_playing = False  # Is the engine rev sound currently playing
+        self.redline_playing = False
+
+        print(f'max_speed list: {self.max_speed}')
+        print(f'reversed_list list: {self.reversed_list}')
+        self.shift_start_time = None
+        self.shift_debug_enabled = True  # Toggle this for debug prints
+
+    def gearshift_up(self):
+        if self.gear < self.gear_max:
+
+            self.gear += 1
+            self.redline_playing = False
+            self.rev_playing = False  # ready to play new rev sound
+            self.shift_start_time = time.time()
+
+            print(f"Shifted up to {self.gear}th gear")
+
+            # Stop previous redline
+            self.engine_channel.stop()
+
+            # Choose gear sound (reuse 3-5 if gear > 5)
+            gear_index = min(self.gear - 1, 5) - 1
+            if gear_index >= 0:
+                self.gear_sounds[gear_index].play()
+
+            # When gear sound finishes, start redline
+            gear_length = self.gear_sounds[gear_index].get_length() if gear_index >= 0 else 0
+            pygame.time.set_timer(pygame.USEREVENT + 1, int(gear_length * 1000))
+
+    def gearshift_down(self):
+        if self.gear > 1:
+
+            self.gear -= 1
+            print(f"Shifted down to {self.gear}th gear")
+            self.engine_channel.stop()
+
+    def controls(self, delta):
+        pressed_keys = pygame.key.get_pressed()
+
+        self.acceleration += -0.2 * self.acceleration * delta
+        self.velocity += -0.02 * self.velocity * delta
+        self.max_speed = self.reversed_list[self.gear - 1] * 50
+
+        # if pressed_keys[pygame.K_q]:
+        #     self.gearshift_down()
+        # if pressed_keys[pygame.K_e]:
+        #     self.gearshift_up()
+
+        if pressed_keys[pygame.K_w] or pressed_keys[pygame.K_UP]:
+            self.acceleration += 2 * delta * self.gear_ratios[self.gear]
+
+            # Only play gear rev if not already playing or at redline
+            if not self.rev_playing and not self.redline_playing:
+                # Pick correct gear sound
+                gear_index = min(self.gear - 1, len(self.gear_sounds) - 1)
+                self.engine_channel.play(self.gear_sounds[gear_index])
+                self.rev_playing = True
+
+                # Schedule Redline loop after gear rev ends
+                pygame.time.set_timer(
+                    pygame.USEREVENT + 1,
+                    int(self.gear_sounds[gear_index].get_length() * 1000),
+                    True
+                )
+
+        elif pressed_keys[pygame.K_s] or pressed_keys[pygame.K_DOWN]:
+            if self.velocity < 1:
+                self.acceleration -= 30 * delta
+            else:
+                self.acceleration = 0
+            self.velocity += -self.velocity * delta
+
+        if pressed_keys[pygame.K_a] or pressed_keys[pygame.K_LEFT]:
+            # self.angle -= delta * self.velocity / 10
+            self.angle -= delta * self.steer_factor
+
+        elif pressed_keys[pygame.K_d] or pressed_keys[pygame.K_RIGHT]:
+            # self.angle += delta * self.velocity / 10
+            self.angle += delta * self.steer_factor
+
+        if self.velocity < self.max_speed:
+            self.velocity += self.acceleration * delta
+
+        self.velocity = max(0, min(self.velocity, self.max_speed))
+        self.x += self.velocity * delta * math.cos(self.angle)
+        self.y += self.velocity * math.sin(self.angle) * delta * 100
+
+        max_steer = 0.8 if self.velocity <= 60 else 0.4
+
+        #self.angle = max(-max_steer, min(max_steer, self.angle))
+        # DEBUG: print time to reach max speed for current gear
+        if self.shift_debug_enabled and self.shift_start_time is not None and self.velocity >= self.max_speed - 0.01:
+            elapsed = time.time() - self.shift_start_time
+            print(f"Gear {self.gear} reached max velocity ({self.max_speed:.2f}) in {elapsed:.3f} seconds")
+            self.shift_start_time = None  # Reset after reaching max speed
+
+
+
+if __name__ == "__main__":
+    pygame.init()
+    asyncio.run(main())
+    pygame.quit()
