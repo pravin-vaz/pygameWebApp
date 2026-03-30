@@ -42,11 +42,11 @@ async def main():
  # Initialise gear sounds
     pygame.mixer.init()
     gear_sounds = [
-        pygame.mixer.Sound("assets/Gear1.wav"),
-        pygame.mixer.Sound("assets/Gear2.wav"),
-        pygame.mixer.Sound("assets/Gear3.wav"),
-        pygame.mixer.Sound("assets/Gear4.wav"),
-        pygame.mixer.Sound("assets/Gear5.wav"),
+        pygame.mixer.Sound("assets/Gear1.ogg"),
+        pygame.mixer.Sound("assets/Gear2.ogg"),
+        pygame.mixer.Sound("assets/Gear3.ogg"),
+        pygame.mixer.Sound("assets/Gear4.ogg"),
+        pygame.mixer.Sound("assets/Gear5.ogg"),
     ]
     redline_sound = pygame.mixer.Sound("assets/Redline.wav")
     redline_sound.set_volume(0.6)
